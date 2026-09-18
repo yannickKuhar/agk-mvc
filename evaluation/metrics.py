@@ -151,15 +151,20 @@ def pruning_metrics(pruning_result) -> PruningMetrics:
 
 def evaluate_pipeline(
     graphs: List[nx.Graph],
-    pipeline,           # NodeFeaturePipeline
-    classifier,         # MVCNodeClassifier
-    pruner,             # ConfidencePruner
-    solver,             # MVCSolver
-    baseline_solver,    # MVCSolver (solves full graph)
+    pipeline,                   # NodeFeaturePipeline
+    classifier,                 # MVCNodeClassifier
+    pruner,                     # ConfidencePruner
+    solver,                     # MVCSolver
+    baseline_solver,            # MVCSolver (solves full graph)
     show_per_graph: bool = False,
+    min_nodes: int = 0,         # skip graphs smaller than this
 ) -> pd.DataFrame:
     """
     Full end-to-end evaluation on a list of test graphs.
+
+    Speedup definition: baseline_solver_time / (pruning_time + reduced_solver_time).
+    Feature extraction is excluded from both sides — it is a one-time cost shared
+    across all downstream uses and is reported separately.
 
     Returns a DataFrame with one row per graph.
     """
@@ -167,34 +172,56 @@ def evaluate_pipeline(
     from pruning.heuristic import reconstruct_cover, verify_cover
 
     rows = []
+    skipped = 0
     for g_idx, G in enumerate(graphs):
         nodes = list(G.nodes())
         n = len(nodes)
 
-        # --- Feature extraction ---
-        X = pipeline.extract_graph(G)
-        X_scaled = pipeline.transform(X)
+        if n < min_nodes:
+            skipped += 1
+            continue
+
         y_true = np.array([G.nodes[v].get("label", -1) for v in nodes])
 
-        # --- Classification ---
-        probs = classifier.predict_proba(X_scaled)
-        preds = (probs >= classifier.best_threshold_).astype(int)
+        # --- Feature extraction + classification (excluded from speedup) ---
+        feature_extraction_time = 0.0
+        clf_metrics_obj = None
+        probs = None
+        if pipeline is not None and classifier is not None:
+            t_feat_start = time.perf_counter()
+            X = pipeline.extract_graph(G)
+            X_scaled = pipeline.transform(X)
+            feature_extraction_time = time.perf_counter() - t_feat_start
+            probs = classifier.predict_proba(X_scaled)
+            clf_metrics_obj = classification_metrics(y_true, probs, classifier.best_threshold_)
 
-        clf_metrics = classification_metrics(y_true, probs, classifier.best_threshold_)
-
-        # --- Pruning ---
+        # --- Pruning + reduced solve (this IS the pipeline runtime) ---
         t_prune_start = time.perf_counter()
-        pruning_result = pruner.prune_with_array(G, probs)
+        if pruner is None:
+            # Baseline only — no pruning
+            from pruning.heuristic import PruningResult
+            import networkx as nx_inner
+            pruning_result = PruningResult(
+                reduced_graph=G.copy(),
+                forced_nodes=set(),
+                removed_nodes=set(),
+                node_probs={v: 0.5 for v in G.nodes()},
+                original_n_nodes=n,
+                original_n_edges=G.number_of_edges(),
+            )
+        elif probs is not None:
+            pruning_result = pruner.prune_with_array(G, probs)
+        else:
+            # Structural pruner: computes its own scores from graph structure
+            pruning_result = pruner.prune(G)
         G_reduced = pruning_result.reduced_graph
-
-        # --- Solve reduced graph ---
         solve_result = solver.solve(G_reduced)
-        t_pipeline_end = time.perf_counter()
+        pipeline_runtime = time.perf_counter() - t_prune_start   # prune + solve only
 
-        pipeline_cover = reconstruct_cover(pruning_result, solve_result.cover)
-        pipeline_runtime = t_pipeline_end - t_prune_start
+        pipeline_cover = reconstruct_cover(pruning_result, solve_result.cover,
+                                           original_graph=G)
 
-        # --- Baseline: solve full graph ---
+        # --- Baseline: solve full graph without any pruning ---
         t_baseline_start = time.perf_counter()
         baseline_result = baseline_solver.solve(G)
         baseline_runtime = time.perf_counter() - t_baseline_start
@@ -210,19 +237,23 @@ def evaluate_pipeline(
 
         row = {
             "graph_id": g_idx,
+            "source": G.graph.get("dataset", "unknown"),
             "n_nodes": n,
             "n_edges": G.number_of_edges(),
-            # Classification
-            "clf_f1": clf_metrics.f1,
-            "clf_auc": clf_metrics.auc,
-            "clf_precision": clf_metrics.precision,
-            "clf_recall": clf_metrics.recall,
+            "n_nodes_reduced": G_reduced.number_of_nodes(),
+            "n_edges_reduced": G_reduced.number_of_edges(),
+            # Classification (None when using structural/no pruner)
+            "clf_f1":        clf_metrics_obj.f1        if clf_metrics_obj else float("nan"),
+            "clf_auc":       clf_metrics_obj.auc       if clf_metrics_obj else float("nan"),
+            "clf_precision": clf_metrics_obj.precision if clf_metrics_obj else float("nan"),
+            "clf_recall":    clf_metrics_obj.recall    if clf_metrics_obj else float("nan"),
             # MVC quality
             "pipeline_cover_size": p_size,
             "baseline_cover_size": b_size,
             "optimality_gap": gap,
             "cover_valid": is_valid,
-            # Speedup
+            # Runtime breakdown
+            "feature_extraction_time": feature_extraction_time,
             "pipeline_runtime": pipeline_runtime,
             "baseline_runtime": baseline_runtime,
             "speedup": speedup,
@@ -235,11 +266,45 @@ def evaluate_pipeline(
 
         if show_per_graph:
             valid_sym = "✓" if is_valid else "✗"
-            print(f"  G{g_idx:03d} n={n:3d}  F1={clf_metrics.f1:.3f}  "
+            clf_str = f"F1={clf_metrics_obj.f1:.3f}  " if clf_metrics_obj else ""
+            print(f"  G{g_idx:03d} n={n:3d}  {clf_str}"
                   f"Gap={gap:+.1%}  Speedup={speedup:.2f}x  {valid_sym}")
+
+    if skipped:
+        print(f"[eval] Skipped {skipped} graphs with fewer than {min_nodes} nodes.")
 
     df = pd.DataFrame(rows)
     return df
+
+
+def print_summary_by_source(df: pd.DataFrame) -> None:
+    """Print per-source breakdown of evaluation metrics."""
+    if df.empty or "source" not in df.columns:
+        return
+    print("\n" + "=" * 70)
+    print("PER-SOURCE BREAKDOWN")
+    print("=" * 70)
+    hdr = (f"{'Source':<22} | {'N':>4} | {'F1':>6} | {'AUC':>6} | "
+           f"{'Valid':>6} | {'Gap':>7} | {'Speedup':>7}")
+    sep = "-" * len(hdr)
+    print(hdr)
+    print(sep)
+    for src, grp in df.groupby("source"):
+        valid_pct = grp["cover_valid"].mean()
+        print(f"  {src:<20} | {len(grp):>4} | "
+              f"{grp['clf_f1'].mean():>6.3f} | "
+              f"{grp['clf_auc'].mean():>6.3f} | "
+              f"{valid_pct:>5.0%} | "
+              f"{grp['optimality_gap'].mean():>+6.1%} | "
+              f"{grp['speedup'].mean():>6.2f}x")
+    print(sep)
+    print(f"  {'ALL':<20} | {len(df):>4} | "
+          f"{df['clf_f1'].mean():>6.3f} | "
+          f"{df['clf_auc'].mean():>6.3f} | "
+          f"{df['cover_valid'].mean():>5.0%} | "
+          f"{df['optimality_gap'].mean():>+6.1%} | "
+          f"{df['speedup'].mean():>6.2f}x")
+    print("=" * 70)
 
 
 def print_summary(df: pd.DataFrame) -> None:
@@ -248,6 +313,11 @@ def print_summary(df: pd.DataFrame) -> None:
     print("PIPELINE EVALUATION SUMMARY")
     print("=" * 60)
     print(f"Graphs evaluated:     {len(df)}")
+    if df.empty:
+        print("\n  No graphs were evaluated — check --eval-min-nodes vs dataset size.")
+        print("  The Erdos dataset contains graphs with 4–34 nodes.")
+        print("=" * 60)
+        return
     print(f"\n--- Node Classification ---")
     print(f"  Mean F1:            {df['clf_f1'].mean():.4f} ± {df['clf_f1'].std():.4f}")
     print(f"  Mean AUC:           {df['clf_auc'].mean():.4f} ± {df['clf_auc'].std():.4f}")

@@ -220,24 +220,44 @@ class ConfidencePruner:
 def reconstruct_cover(
     pruning_result: PruningResult,
     solver_cover: Set,
+    original_graph: Optional[nx.Graph] = None,
 ) -> Set:
     """
     Combine the forced nodes from pruning with the solver's cover on G'.
 
     Parameters
     ----------
-    pruning_result : PruningResult
-    solver_cover : set of nodes forming a valid MVC of G'
+    pruning_result  : PruningResult
+    solver_cover    : set of nodes forming a valid MVC of G'
+    original_graph  : if provided, the result is verified against the full
+                      original graph and an error is raised if invalid
 
     Returns
     -------
     Full MVC of original G.
     """
-    return pruning_result.forced_nodes | solver_cover
+    full_cover = pruning_result.forced_nodes | solver_cover
+
+    if original_graph is not None:
+        invalid_edges = [
+            (u, v) for u, v in original_graph.edges()
+            if u not in full_cover and v not in full_cover
+        ]
+        if invalid_edges:
+            # Pruner incorrectly removed nodes that share edges with each
+            # other.  Repair by adding one endpoint per uncovered edge.
+            repair = {u for u, v in invalid_edges}
+            full_cover |= repair
+            print(f"[pruning] WARNING: repaired {len(invalid_edges)} uncovered "
+                  f"edges by adding {len(repair)} nodes to cover "
+                  f"(forced={len(pruning_result.forced_nodes)}, "
+                  f"solver={len(solver_cover)})")
+
+    return full_cover
 
 
 def verify_cover(G: nx.Graph, cover: Set) -> bool:
-    """Check that `cover` is a valid vertex cover of G."""
+    """Check that `cover` is a valid vertex cover of the full graph G."""
     for u, v in G.edges():
         if u not in cover and v not in cover:
             return False

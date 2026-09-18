@@ -1,27 +1,33 @@
 """
 data/loader.py
 --------------
-Load the PKU-ML/Erdos dataset from HuggingFace and convert each example
-into a NetworkX graph with binary node labels (1 = in optimal MVC, 0 = not).
+Load pre-downloaded Erdos MVC graphs from local JSON files.
 
-Dataset schema (inferred from HuggingFace card):
-  Each example is a graph with:
-    - edge_index : List[List[int]]  — pairs of node indices
-    - num_nodes  : int
-    - y          : List[int]        — per-node binary MVC label
+Expected files:
+    data/erdos/train.json
+    data/erdos/test.json
+
+Each file is a JSON array of records with fields:
+    n_nodes : int            — number of nodes (0-indexed: 0..n_nodes-1)
+    edges   : [[u, v], ...]  — undirected edges, 0-indexed
+    mvc     : [v, ...]       — optimal MVC node ids, 0-indexed
+    source  : str            — original source file (informational)
+
+To create these files, run:
+    python download_dataset.py --all-splits
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import List, Optional
+
 import networkx as nx
 import numpy as np
-from typing import Iterator, Tuple, List, Optional
-from datasets import load_dataset
 
+_DATA_DIR = Path(__file__).parent / "erdos"
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def load_erdos(
     split: str = "train",
@@ -30,121 +36,73 @@ def load_erdos(
     max_nodes: int = 500,
 ) -> List[nx.Graph]:
     """
-    Load the Erdos dataset and return a list of NetworkX graphs.
+    Load the Erdos MVC dataset from a local JSON file.
 
-    Each graph has:
-      - node attribute 'label' : int  (1 if in optimal MVC, 0 otherwise)
+    Each returned graph has node attribute 'label': 1 if in optimal MVC, 0 otherwise.
 
     Parameters
     ----------
-    split       : HuggingFace dataset split ('train', 'test', etc.)
-    max_graphs  : cap on number of graphs to load (None = all)
-    min_nodes   : skip graphs smaller than this
-    max_nodes   : skip graphs larger than this (ORCA is expensive on dense graphs)
+    split      : dataset split to load ('train' or 'test')
+    max_graphs : cap on the number of graphs returned (None = all)
+    min_nodes  : skip graphs with fewer nodes than this
+    max_nodes  : skip graphs with more nodes than this
     """
-    print(f"[loader] Loading PKU-ML/Erdos ({split}) from HuggingFace ...")
-    ds = load_dataset("PKU-ML/Erdos", split=split, trust_remote_code=True)
+    json_path = _DATA_DIR / f"{split}.json"
+    if not json_path.exists():
+        raise FileNotFoundError(
+            f"[loader] Dataset file not found: {json_path}\n"
+            f"  Run:  python download_dataset.py --split {split}\n"
+            f"  or:   python download_dataset.py --all-splits\n"
+            f"  to download and save the dataset locally."
+        )
+
+    print(f"[loader] Loading from {json_path} ...")
+    with open(json_path) as f:
+        records = json.load(f)
 
     graphs: List[nx.Graph] = []
-    for i, example in enumerate(ds):
+    n_skipped = 0
+    for rec in records:
         if max_graphs is not None and len(graphs) >= max_graphs:
             break
 
-        G = _example_to_nx(example)
-        if G is None:
-            continue
-        n = G.number_of_nodes()
+        n = rec["n_nodes"]
         if n < min_nodes or n > max_nodes:
+            n_skipped += 1
+            continue
+
+        G = _record_to_nx(rec)
+        if G is None:
+            n_skipped += 1
             continue
 
         graphs.append(G)
 
-    print(f"[loader] Loaded {len(graphs)} graphs.")
+    print(
+        f"[loader] Loaded {len(graphs)} graphs "
+        f"(skipped {n_skipped} — too small/large or parse errors)."
+    )
     return graphs
 
 
-def iter_erdos(
-    split: str = "train",
-    min_nodes: int = 5,
-    max_nodes: int = 500,
-) -> Iterator[nx.Graph]:
-    """Streaming version — yields one graph at a time (memory efficient)."""
-    ds = load_dataset("PKU-ML/Erdos", split=split, trust_remote_code=True, streaming=True)
-    for example in ds:
-        G = _example_to_nx(example)
-        if G is None:
-            continue
-        n = G.number_of_nodes()
-        if min_nodes <= n <= max_nodes:
-            yield G
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _example_to_nx(example: dict) -> Optional[nx.Graph]:
-    """Convert one HuggingFace Erdos example to a NetworkX graph."""
+def _record_to_nx(rec: dict) -> Optional[nx.Graph]:
     try:
-        edge_index = example.get("edge_index", [])
-        num_nodes  = example.get("num_nodes", 0)
-        labels     = example.get("y", [])
-
-        if num_nodes == 0:
-            return None
+        n = int(rec["n_nodes"])
+        mvc_set = set(int(v) for v in rec["mvc"])
 
         G = nx.Graph()
-        G.add_nodes_from(range(num_nodes))
+        G.add_nodes_from(range(n))
+        for node_id in range(n):
+            G.nodes[node_id]["label"] = 1 if node_id in mvc_set else 0
 
-        # Labels — some datasets store flat list, some nested
-        if labels:
-            flat_labels = _flatten(labels)
-            for node_id, lbl in enumerate(flat_labels):
-                G.nodes[node_id]["label"] = int(lbl)
-        else:
-            for node_id in range(num_nodes):
-                G.nodes[node_id]["label"] = -1  # unknown
-
-        # Edges — edge_index can be [[src,dst], ...] or [[srcs],[dsts]]
-        edges = _parse_edge_index(edge_index, num_nodes)
-        G.add_edges_from(edges)
-
-        # Remove self-loops (kernel algorithms assume simple graphs)
-        G.remove_edges_from(nx.selfloop_edges(G))
+        for u, v in rec["edges"]:
+            u, v = int(u), int(v)
+            if u != v and 0 <= u < n and 0 <= v < n:
+                G.add_edge(u, v)
 
         return G
-
-    except Exception as e:
-        print(f"[loader] Warning: skipping example due to error: {e}")
+    except Exception:
         return None
-
-
-def _flatten(lst) -> List:
-    """Flatten a possibly nested list one level deep."""
-    if lst and isinstance(lst[0], (list, tuple)):
-        return [x for sub in lst for x in sub]
-    return list(lst)
-
-
-def _parse_edge_index(edge_index, num_nodes: int):
-    """
-    Accept edge_index in two common formats:
-      1. [[src, dst], [src, dst], ...]   — list of pairs
-      2. [[src1, src2, ...], [dst1, dst2, ...]]  — two parallel lists (PyG style)
-    """
-    if not edge_index:
-        return []
-
-    # Check format
-    if len(edge_index) == 2 and isinstance(edge_index[0], (list, np.ndarray)):
-        srcs, dsts = edge_index[0], edge_index[1]
-        edges = list(zip(srcs, dsts))
-    else:
-        edges = [tuple(e) for e in edge_index]
-
-    # Filter out-of-range
-    valid = [(u, v) for u, v in edges if u < num_nodes and v < num_nodes and u != v]
-    return valid
 
 
 # ---------------------------------------------------------------------------
@@ -154,12 +112,21 @@ def _parse_edge_index(edge_index, num_nodes: int):
 def get_node_labels(G: nx.Graph) -> np.ndarray:
     """Return node labels as a numpy array, ordered by node id."""
     n = G.number_of_nodes()
-    labels = np.array([G.nodes[i].get("label", -1) for i in range(n)], dtype=int)
-    return labels
+    return np.array([G.nodes[i].get("label", -1) for i in range(n)], dtype=int)
 
 
 def graph_summary(graphs: List[nx.Graph]) -> dict:
-    """Print basic statistics about a list of graphs."""
+    """Return basic statistics about a list of graphs. Safe on empty lists."""
+    if not graphs:
+        return {
+            "num_graphs"       : 0,
+            "avg_nodes"        : float("nan"),
+            "avg_edges"        : float("nan"),
+            "avg_pos_fraction" : float("nan"),
+            "min_nodes"        : 0,
+            "max_nodes"        : 0,
+        }
+
     sizes = [G.number_of_nodes() for G in graphs]
     edges = [G.number_of_edges() for G in graphs]
     pos_fracs = []
@@ -167,7 +134,7 @@ def graph_summary(graphs: List[nx.Graph]) -> dict:
         lbls = get_node_labels(G)
         valid = lbls[lbls >= 0]
         if len(valid) > 0:
-            pos_fracs.append(valid.mean())
+            pos_fracs.append(float(valid.mean()))
 
     return {
         "num_graphs"       : len(graphs),

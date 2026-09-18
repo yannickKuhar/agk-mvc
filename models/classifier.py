@@ -279,6 +279,7 @@ class MVCNodeClassifier:
         X: np.ndarray,
         max_display: int = 20,
         plot: bool = True,
+        plot_path: str = "shap_summary.png",
     ) -> Optional[np.ndarray]:
         """
         Compute SHAP values and plot feature importance.
@@ -290,10 +291,17 @@ class MVCNodeClassifier:
             return None
 
         assert self.model_ is not None, "Model not trained yet."
-        explainer = shap.TreeExplainer(self.model_)
-        shap_values = explainer.shap_values(X)
+        try:
+            explainer = shap.TreeExplainer(self.model_)
+            shap_values = explainer.shap_values(X)
+        except Exception as e:
+            print(f"[classifier] SHAP failed (XGBoost/SHAP version mismatch?): {e}")
+            print("[classifier] Skipping SHAP explanation.")
+            return None
 
         if plot:
+            import matplotlib
+            matplotlib.use("Agg")  # headless — no display required
             import matplotlib.pyplot as plt
             shap.summary_plot(
                 shap_values,
@@ -303,8 +311,8 @@ class MVCNodeClassifier:
                 show=False,
             )
             plt.tight_layout()
-            plt.savefig("shap_summary.png", dpi=150, bbox_inches="tight")
-            print("[classifier] SHAP summary plot saved to shap_summary.png")
+            plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+            print(f"[classifier] SHAP summary plot saved to {plot_path}")
             plt.close()
 
         return shap_values
