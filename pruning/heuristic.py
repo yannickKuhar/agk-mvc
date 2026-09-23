@@ -66,10 +66,20 @@ class ConfidencePruner:
     """
     Prune a graph by removing nodes predicted to be outside the MVC.
 
+    Two-sided pruning:
+      - Nodes with P(in MVC) < threshold  → removed (predicted NOT in cover).
+      - Nodes with P(in MVC) > fix_threshold → fixed into cover (predicted
+        definitely IN cover); removed from the ILP search space, their
+        incident edges no longer need to be covered by other nodes.
+
     Parameters
     ----------
     threshold : float
         Nodes with P(in MVC) < threshold are pruning candidates (default 0.10).
+    fix_threshold : float
+        Nodes with P(in MVC) > fix_threshold are locked into the cover and
+        excluded from the ILP (default 1.1, i.e. disabled).  Set to e.g. 0.85
+        to enable two-sided pruning.
     repair_strategy : str
         'force_neighbor': force a neighbor into the cover to repair feasibility.
         'keep_node': instead of forcing, keep the original node.
@@ -80,10 +90,12 @@ class ConfidencePruner:
     def __init__(
         self,
         threshold: float = 0.10,
+        fix_threshold: float = 1.1,
         repair_strategy: str = "force_neighbor",
         min_remaining_nodes: int = 2,
     ):
         self.threshold = threshold
+        self.fix_threshold = fix_threshold
         self.repair_strategy = repair_strategy
         self.min_remaining_nodes = min_remaining_nodes
 
@@ -110,13 +122,20 @@ class ConfidencePruner:
         n_orig = G.number_of_nodes()
         m_orig = G.number_of_edges()
 
+        # Two-sided: lock high-confidence nodes into cover first
+        forced_high: Set = set()
+        if self.fix_threshold <= 1.0:
+            forced_high = {v for v in nodes if node_probs.get(v, 0.5) >= self.fix_threshold}
+
         # Sort candidates by ascending probability (most confident to remove first)
+        # Exclude already-forced-high nodes from removal candidates
         candidates = sorted(
-            [v for v in nodes if node_probs.get(v, 0.5) < self.threshold],
+            [v for v in nodes
+             if node_probs.get(v, 0.5) < self.threshold and v not in forced_high],
             key=lambda v: node_probs.get(v, 0.5),
         )
 
-        forced_nodes: Set = set()
+        forced_nodes: Set = set(forced_high)  # seed with high-confidence nodes
         removed_nodes: Set = set()
         covered_by_forced: Set = set()  # edges already covered by forced nodes
 
@@ -166,22 +185,18 @@ class ConfidencePruner:
                 # Conservative: don't remove if it would leave uncovered edges
                 continue
 
-        # Build reduced graph
-        remaining_nodes = [v for v in nodes if v not in removed_nodes]
-        G_reduced = G.subgraph(remaining_nodes).copy()
-
-        # Identify forced nodes: nodes adjacent to removed nodes that
-        # MUST be in the cover (their only cover was the removed node)
+        # Identify repair-forced nodes: neighbors of removed nodes that MUST
+        # cover the now-external edges left by removed nodes.
         for v in removed_nodes:
             for u in G.neighbors(v):
-                if u not in removed_nodes:
-                    # u is still in the graph; the edge (v, u) is now an
-                    # "external" edge. Since v is removed, u must cover it.
+                if u not in removed_nodes and u not in forced_high:
                     forced_nodes.add(u)
 
-        # Forced nodes don't need to appear in the reduced subproblem
-        # (they're already in the cover), but we keep them for the solver
-        # to handle edges among themselves.
+        # Build reduced graph: exclude removed nodes AND forced_high nodes.
+        # Edges covered by forced_high nodes disappear automatically since
+        # those nodes are absent from the subgraph.
+        ilp_nodes = [v for v in nodes if v not in removed_nodes and v not in forced_high]
+        G_reduced = G.subgraph(ilp_nodes).copy()
 
         return PruningResult(
             reduced_graph=G_reduced,

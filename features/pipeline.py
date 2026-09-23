@@ -1,10 +1,12 @@
 """
 features/pipeline.py
 --------------------
-Combines VSKO, GDV, and Random Walk features into a single node feature matrix.
+Combines node feature families into a single node feature matrix.
 
-Output feature vector per node (up to 106 dimensions):
-  [VSKO (13)] + [GDV (73)] + [RW (20)]
+Feature sets:
+  'kernel'  (default) : VSKO (13) + GDV (73) + RW (20)  =  106 dims
+  'lauri'             : Lauri et al. (2023) 9 handcrafted features
+  'both'              : kernel + lauri  =  115 dims
 
 Also handles:
   - Graph-level batch processing
@@ -14,7 +16,7 @@ Also handles:
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import networkx as nx
 import numpy as np
@@ -25,13 +27,18 @@ from .vsko import VSKONodeFeatures, feature_names as vsko_names
 from .gdv import GDVNodeFeatures, feature_names as gdv_names
 from .random_walk import RandomWalkNodeFeatures, feature_names as rw_names
 
+FeatureSet = Literal["kernel", "lauri", "both"]
+
 
 class NodeFeaturePipeline:
     """
-    Full feature extraction pipeline: VSKO + GDV + RW → node feature matrix.
+    Full feature extraction pipeline → node feature matrix.
 
     Parameters
     ----------
+    feature_set : str
+        Which feature family to use: 'kernel' (VSKO+GDV+RW, default),
+        'lauri' (9 handcrafted from Lauri et al. 2023), or 'both'.
     ego_hops : int
         Ego graph radius for VSKO (default 2).
     use_orca_binary : bool
@@ -39,11 +46,11 @@ class NodeFeaturePipeline:
     orca_path : str
         Path to ORCA binary.
     use_vsko : bool
-        Include VSKO features (default True).
+        Include VSKO features (only when feature_set includes 'kernel').
     use_gdv : bool
-        Include GDV features (default True).
+        Include GDV features (only when feature_set includes 'kernel').
     use_rw : bool
-        Include random walk features (default True).
+        Include random walk features (only when feature_set includes 'kernel').
     normalize : bool
         Apply StandardScaler to the combined feature matrix (default True).
     betweenness_k : int
@@ -52,6 +59,7 @@ class NodeFeaturePipeline:
 
     def __init__(
         self,
+        feature_set: FeatureSet = "kernel",
         ego_hops: int = 2,
         use_orca_binary: bool = False,
         orca_path: str = "orca",
@@ -61,14 +69,23 @@ class NodeFeaturePipeline:
         normalize: bool = True,
         betweenness_k: int = 50,
     ):
-        self.use_vsko = use_vsko
-        self.use_gdv = use_gdv
-        self.use_rw = use_rw
+        if feature_set not in ("kernel", "lauri", "both"):
+            raise ValueError(f"feature_set must be 'kernel', 'lauri', or 'both'; got {feature_set!r}")
+
+        self.feature_set = feature_set
         self.normalize = normalize
 
-        self.vsko = VSKONodeFeatures(ego_hops=ego_hops, use_orca_binary=use_orca_binary, orca_path=orca_path) if use_vsko else None
-        self.gdv  = GDVNodeFeatures(orca_path=orca_path)  if use_gdv  else None
-        self.rw   = RandomWalkNodeFeatures(betweenness_k=betweenness_k) if use_rw else None
+        use_kernel = feature_set in ("kernel", "both")
+        use_lauri  = feature_set in ("lauri",  "both")
+
+        self.use_vsko = use_vsko and use_kernel
+        self.use_gdv  = use_gdv  and use_kernel
+        self.use_rw   = use_rw   and use_kernel
+        self.use_lauri = use_lauri
+
+        self.vsko = VSKONodeFeatures(ego_hops=ego_hops, use_orca_binary=use_orca_binary, orca_path=orca_path) if self.use_vsko else None
+        self.gdv  = GDVNodeFeatures(orca_path=orca_path)  if self.use_gdv  else None
+        self.rw   = RandomWalkNodeFeatures(betweenness_k=betweenness_k) if self.use_rw else None
 
         self.scaler: Optional[StandardScaler] = StandardScaler() if normalize else None
         self._fitted = False
@@ -95,6 +112,10 @@ class NodeFeaturePipeline:
 
         if self.rw is not None:
             parts.append(self.rw.fit_transform(G))
+
+        if self.use_lauri:
+            from .lauri import compute_lauri_features
+            parts.append(compute_lauri_features(G))
 
         if not parts:
             raise ValueError("At least one feature type must be enabled.")
@@ -171,6 +192,9 @@ class NodeFeaturePipeline:
             names.extend(gdv_names())
         if self.use_rw:
             names.extend(rw_names())
+        if self.use_lauri:
+            from .lauri import feature_names as lauri_names
+            names.extend(lauri_names())
         return names
 
     @property

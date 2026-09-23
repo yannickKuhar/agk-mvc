@@ -1,28 +1,45 @@
 #!/bin/bash
 #SBATCH --partition=amd
-#SBATCH --job-name=mvc-experiments
+#SBATCH --job-name=mvc-journal
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
 
 # ---------------------------------------------------------------------------
-# Adjust the lines above for your cluster:
-#   --time        48 h covers data generation + all experiments
-#   --cpus-per-task  cores available to Python multiprocessing
-#   --mem         48 G; COLLAB labelling + parallel ILP jobs need headroom
-#   Add --partition, --account, --gres=gpu:... as required by your cluster.
+# Journal-paper experiment suite
+#
+# Phase 1 — data preparation (~10 min if cached, ~44 h from scratch):
+#   synthetic splits skip if .json exists; TUDatasets and real-world skip by
+#   default (pass --recompute / --force to regenerate).
+#
+# Phase 2 — experiments (~120 jobs total across 8 parallel workers):
+#   Groups 1-5 : baselines, pruner comparison, threshold sweep, solver
+#                comparison, cross-domain
+#   Group A    : ablation (Lauri features vs. kernel vs. both)
+#   Group S    : sensitivity sweep (fix_threshold × prune_threshold curves)
+#   Group R    : real-world graphs
+#   Multi-seed : 5 seeds × key configs for statistical significance
+#
+# Time estimate (all data cached):
+#   ~120 experiments / 8 workers × ~8 min avg = ~2 h
+#   Multi-seed adds ~25 more jobs        = ~0.5 h
+#   Total  ≈ 2.5–3 h  →  48 h limit is comfortable
+#
+# Workers: 8 (not 16) — each job loads full datasets + XGBoost model.
+#   16 simultaneous jobs risk OOM on 48 GB.
 # ---------------------------------------------------------------------------
 
-echo "=== MVC experiment batch job ==="
+echo "=== MVC journal experiment batch job ==="
 echo "Job ID:   $SLURM_JOB_ID"
 echo "Node:     $SLURMD_NODENAME"
 echo "Started:  $(date)"
 echo "Working dir: $(pwd)"
 
-mkdir -p results
+mkdir -p results data/realworld
 
 # ===========================================================================
 # PHASE 1: Data preparation
@@ -30,27 +47,18 @@ mkdir -p results
 echo ""
 echo "=== Phase 1: Preparing data ==="
 
-# Erdos dataset (HuggingFace)
+# Erdos dataset
 echo "--- Erdos ---"
 python download_dataset.py --all-splits
 
-# Synthetic datasets
-# small : n=20-50,  p=0.1-0.4,  200 graphs/family,  ~easy for ILP
-# medium: n=50-150, p=0.1-0.4,  100 graphs/family,  ~borderline
-# hard  : n=50-80,  p=0.3-0.5,   75 graphs/family,  1-15 s ILP time  ← key dataset
-# large : n=150-500,p=0.1-0.4,   50 graphs/family,  ~always timeout
+# Synthetic datasets — skip if .json already exists (add --force to regenerate)
 echo "--- Synthetic splits ---"
 python generate_synthetic.py --split small  --solver-timeout 120
 python generate_synthetic.py --split medium --solver-timeout 300
 python generate_synthetic.py --split hard   --solver-timeout 300
 python generate_synthetic.py --split large  --solver-timeout 600
 
-# TUDatasets — compute optimal MVC labels with ILP
-# MUTAG:    188 graphs, avg 18 nodes  — fast (~seconds total)
-# NCI1:     4110 graphs, avg 30 nodes — use max-graphs 500 for speed
-# NCI109:   4127 graphs, avg 30 nodes — similar to NCI1
-# PROTEINS: 1113 graphs, avg 39 nodes — moderate
-# COLLAB:   5000 graphs, avg 74 nodes, dense — SLOW (~20s/graph); 200 graphs ≈ 1 h
+# TUDataset MVC labels — skipped automatically if cache exists
 echo "--- TUDataset MVC labels ---"
 python compute_tudataset_mvc.py --dataset MUTAG
 python compute_tudataset_mvc.py --dataset NCI1     --max-graphs 500
@@ -58,14 +66,30 @@ python compute_tudataset_mvc.py --dataset NCI109   --max-graphs 500
 python compute_tudataset_mvc.py --dataset PROTEINS
 python compute_tudataset_mvc.py --dataset COLLAB   --max-graphs 200 --solver-timeout 120
 
+# Real-world graphs — skip if builtin.json exists
+echo "--- Real-world graphs ---"
+if [ -f data/realworld/builtin.json ]; then
+    echo "[realworld] data/realworld/builtin.json exists — skipping generation."
+else
+    python download_realworld.py
+fi
+
 # ===========================================================================
 # PHASE 2: Run all experiments
 # ===========================================================================
-# --workers 4: run 4 train.py processes in parallel.
-# Keep workers <= cpus-per-task / 2 so ILP threads don't fight each other.
 echo ""
 echo "=== Phase 2: Running experiments ==="
-python run_all.py --workers 4
+
+# Run all groups (skip real-world if generation failed, skip-large for speed)
+python run_all.py --workers 8
 
 echo ""
 echo "=== All done: $(date) ==="
+
+# ===========================================================================
+# PHASE 3: Aggregate results across seeds
+# ===========================================================================
+echo ""
+echo "=== Phase 3: Aggregating results ==="
+python analysis/aggregate.py --results-dir results/ --out results/aggregate_summary.csv
+echo "Summary saved to results/aggregate_summary.csv"

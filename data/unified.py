@@ -11,6 +11,7 @@ Supported source strings:
   'synthetic:large'      data/synthetic/large.json
   'pace'                 data/pace/  (requires manual download)
   'tudataset:{NAME}'     data/tudatasets/{NAME}_mvc.json
+  'realworld'            data/realworld/builtin.json  (run download_realworld.py)
 
 Usage:
     loader = DatasetLoader()
@@ -151,9 +152,26 @@ class DatasetLoader:
                 from data.tudataset import load_tudataset
                 return load_tudataset(name=name, max_graphs=max_graphs,
                                       min_nodes=min_nodes, max_nodes=max_nodes)
+            if source == "realworld":
+                p = Path("data/realworld/builtin.json")
+                if not p.exists():
+                    raise FileNotFoundError(
+                        "data/realworld/builtin.json not found. "
+                        "Run: python download_realworld.py"
+                    )
+                return _load_json_records(p, max_graphs, min_nodes, max_nodes, "realworld")
+            if source.startswith("realworld:"):
+                name = source.split(":", 1)[1]
+                p = Path("data/realworld") / f"{name}.json"
+                if not p.exists():
+                    raise FileNotFoundError(
+                        f"data/realworld/{name}.json not found. "
+                        "Run: python download_realworld.py"
+                    )
+                return _load_json_records(p, max_graphs, min_nodes, max_nodes, f"realworld:{name}")
             print(f"[DatasetLoader] Unknown source '{source}'. "
                   f"Valid: erdos, synthetic:{{small|medium|large|hard}}, "
-                  f"pace, tudataset:{{NAME}}")
+                  f"pace, tudataset:{{NAME}}, realworld")
             return []
         except FileNotFoundError as e:
             print(f"[DatasetLoader] {source}: {e}")

@@ -65,6 +65,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--solver-timeout", type=int, default=None,
                    help="Override ILP timeout per graph (seconds)")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--force", action="store_true",
+                   help="Regenerate even if the output file already exists")
     return p.parse_args()
 
 
@@ -82,6 +84,9 @@ def run_split(split_name: str, args: argparse.Namespace) -> None:
           f"density_range={density_range}")
 
     output_path = _OUT_DIR / f"{split_name}.json"
+    if output_path.exists() and not args.force:
+        print(f"[synthetic] Cache exists at {output_path} — skipping (use --force to regenerate).")
+        return
     graphs = generate_dataset(
         families=families,
         n_graphs=n_per_family,

@@ -58,8 +58,17 @@ def parse_args():
                    help="Skip graphs larger than this (default: 500)")
     p.add_argument("--ego-hops", type=int, default=2)
     p.add_argument("--prune-threshold", type=float, default=0.10)
+    p.add_argument("--fix-threshold", type=float, default=1.1,
+                   help="Nodes with P(in MVC) > this are locked into cover and excluded "
+                        "from the ILP (two-sided pruning). Default 1.1 = disabled. "
+                        "Try 0.85 for two-sided pruning.")
     p.add_argument("--output-dir", type=str, default=None,
                    help="Output directory (default: results/<datasets>_<timestamp>)")
+    p.add_argument("--feature-set", type=str, default="kernel",
+                   choices=["kernel", "lauri", "both"],
+                   help="Feature family: 'kernel' (VSKO+GDV+RW, default), "
+                        "'lauri' (9 handcrafted from Lauri et al. 2023), "
+                        "or 'both' (115 dims total)")
     p.add_argument("--no-vsko", action="store_true")
     p.add_argument("--no-gdv", action="store_true")
     p.add_argument("--no-rw", action="store_true")
@@ -85,12 +94,22 @@ def parse_args():
 
 
 def _make_run_dir(datasets_str: str, pruner: str = "ml",
-                  ilp_solver: str = "auto", base: str = "results") -> Path:
+                  ilp_solver: str = "auto", prune_threshold: float = 0.10,
+                  fix_threshold: float = 1.1, feature_set: str = "kernel",
+                  seed: int = 42, base: str = "results") -> Path:
     tag = datasets_str.replace(",", "_").replace(":", "-").replace(" ", "")
     if pruner != "ml":
         tag += f"_{pruner}-pruner"
     if ilp_solver != "auto":
         tag += f"_{ilp_solver}-solver"
+    if feature_set != "kernel":
+        tag += f"_{feature_set}-feat"
+    if prune_threshold != 0.10:
+        tag += f"_pt{prune_threshold:.2f}"
+    if fix_threshold <= 1.0:
+        tag += f"_ft{fix_threshold:.2f}"
+    if seed != 42:
+        tag += f"_s{seed}"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return Path(base) / f"{tag}_{ts}"
 
@@ -99,7 +118,11 @@ def main():
     args = parse_args()
     if args.output_dir is None:
         out_dir = _make_run_dir(args.datasets, pruner=args.pruner,
-                                ilp_solver=args.ilp_solver)
+                                ilp_solver=args.ilp_solver,
+                                prune_threshold=args.prune_threshold,
+                                fix_threshold=args.fix_threshold,
+                                feature_set=args.feature_set,
+                                seed=args.seed)
     else:
         out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -138,7 +161,9 @@ def main():
 
     if args.pruner in ("ml", None):
         print("\n=== Step 2: Extracting node features ===")
+        print(f"[train] Feature set: {args.feature_set}")
         pipeline = NodeFeaturePipeline(
+            feature_set=args.feature_set,
             ego_hops=args.ego_hops,
             use_orca_binary=args.use_orca,
             orca_path=args.orca_path,
@@ -211,7 +236,8 @@ def main():
     print("\n=== Step 5: End-to-end pipeline evaluation ===")
 
     if args.pruner == "ml":
-        pruner = ConfidencePruner(threshold=args.prune_threshold)
+        pruner = ConfidencePruner(threshold=args.prune_threshold,
+                                  fix_threshold=args.fix_threshold)
     elif args.pruner == "structural":
         pruner = StructuralPruner(threshold=args.prune_threshold)
         print(f"[train] Using StructuralPruner (threshold={args.prune_threshold})")
