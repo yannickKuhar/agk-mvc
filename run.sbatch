@@ -19,15 +19,15 @@
 # Phase 2 — experiments (~120 jobs total across 8 parallel workers):
 #   Groups 1-5 : baselines, pruner comparison, threshold sweep, solver
 #                comparison, cross-domain
-#   Group A    : ablation (Lauri features vs. kernel vs. both)
+#   Group A    : ablation A1-A10 (kernel sub-families, Lauri, Ajwani, greedy pruner)
 #   Group S    : sensitivity sweep (fix_threshold × prune_threshold curves)
 #   Group R    : real-world graphs
-#   Multi-seed : 5 seeds × key configs for statistical significance
+#   Multi-seed : 5 seeds × 10 ablation + 1 realworld = 55 jobs
 #
 # Time estimate (all data cached):
-#   ~120 experiments / 8 workers × ~8 min avg = ~2 h
-#   Multi-seed adds ~25 more jobs        = ~0.5 h
-#   Total  ≈ 2.5–3 h  →  48 h limit is comfortable
+#   ~120 single-seed experiments / 8 workers × ~8 min avg = ~2 h
+#   55 multi-seed ablation jobs                            = ~1 h
+#   Total  ≈ 3–4 h  →  48 h limit is comfortable
 #
 # Workers: 8 (not 16) — each job loads full datasets + XGBoost model.
 #   16 simultaneous jobs risk OOM on 48 GB.
@@ -79,6 +79,15 @@ fi
 # ===========================================================================
 echo ""
 echo "=== Phase 2: Running experiments ==="
+
+# Sanity-check: print all commands that will run (no execution)
+echo "--- Dry-run confirmation ---"
+python run_all.py --dry-run --group ablation
+if [ $? -ne 0 ]; then
+    echo "ERROR: dry-run failed — aborting experiments." >&2
+    exit 1
+fi
+echo "--- Dry-run OK — starting real runs ---"
 
 # Run all groups (skip real-world if generation failed, skip-large for speed)
 python run_all.py --workers 8
