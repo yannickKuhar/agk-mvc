@@ -103,24 +103,25 @@ GROUP5 = [
 ]
 
 # ── Group A: ablation — feature set comparison (KEY for journal paper) ───────
-# All use synthetic:hard, ml pruner, best threshold config (pt=0.10, ft=0.85)
-# Compares: Lauri 2023 handcrafted vs. kernel (VSKO+GDV+RW) vs. combined
+# All use synthetic:hard, ml pruner, best threshold config (pt=0.10, ft=0.85).
+# A1-A7 are run with ALL 5 seeds (via MULTI_SEED_CONFIGS below).
+# Do NOT run this list with a single seed — always expand via _expand_multi_seed.
 GROUP_ABLATION = [
     # A1: no pruner — true ILP baseline (no features needed)
     {"datasets": "synthetic:hard", "pruner": "none"},
-    # A2: kernel features only (VSKO only, no GDV, no RW)
+    # A2: VSKO only (no GDV, no RW)
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "kernel", "no_gdv": True, "no_rw": True},
-    # A3: kernel features only (GDV only)
+    # A3: GDV only (no VSKO, no RW)
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "kernel", "no_vsko": True, "no_rw": True},
-    # A4: kernel features only (RW only)
+    # A4: RW only (no VSKO, no GDV)
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "kernel", "no_vsko": True, "no_gdv": True},
-    # A5: full kernel features (VSKO+GDV+RW) — current default
+    # A5: full kernel features (VSKO+GDV+RW) — current best
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "kernel"},
@@ -128,7 +129,7 @@ GROUP_ABLATION = [
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "lauri"},
-    # A7: kernel + Lauri combined
+    # A7: kernel + Lauri combined (full 115 dims)
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "both"},
@@ -159,21 +160,12 @@ GROUP_REALWORLD = [
      "prune_threshold": 0.10, "fix_threshold": 0.85},
 ]
 
-# ── Multi-seed: key configs repeated with MULTI_SEEDS ───────────────────────
-# These are expanded into len(MULTI_SEEDS) jobs each at runtime.
-MULTI_SEED_CONFIGS = [
-    # Best overall configuration
-    {"datasets": "synthetic:hard", "pruner": "ml",
-     "prune_threshold": 0.10, "fix_threshold": 0.85},
-    # Baseline (no pruner)
-    {"datasets": "synthetic:hard", "pruner": "none"},
-    # Ablation: Lauri features
-    {"datasets": "synthetic:hard", "pruner": "ml",
-     "prune_threshold": 0.10, "fix_threshold": 0.85, "feature_set": "lauri"},
-    # Ablation: combined features
-    {"datasets": "synthetic:hard", "pruner": "ml",
-     "prune_threshold": 0.10, "fix_threshold": 0.85, "feature_set": "both"},
-    # Real-world best config (if data available)
+# ── Multi-seed: ALL ablation conditions A1-A7 × MULTI_SEEDS ─────────────────
+# Exactly 5 seeds per condition → 35 ablation jobs + 5 real-world jobs = 40 total.
+# This is the authoritative job list for statistical analysis.
+# Seeds: [42, 123, 456, 789, 1337] — each config runs once per seed.
+MULTI_SEED_CONFIGS = GROUP_ABLATION + [
+    # Real-world best config (cross-domain generalisation check)
     {"datasets": "realworld", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85},
 ]
@@ -189,9 +181,9 @@ ALL_GROUPS = {
     "3":           GROUP3,
     "4":           GROUP4,
     "5":           GROUP5,
-    "ablation":    GROUP_ABLATION,
     "sensitivity": GROUP_SENSITIVITY,
     "realworld":   GROUP_REALWORLD,
+    # "ablation" is handled specially in main() — always expanded to multi-seed
 }
 
 
@@ -224,6 +216,12 @@ def _exp_label(exp: dict, seed: int = 42) -> str:
         label += f"  [solver={exp['ilp_solver']}]"
     if "feature_set" in exp:
         label += f"  [feat={exp['feature_set']}]"
+    if exp.get("no_vsko") or exp.get("no_gdv") or exp.get("no_rw"):
+        active = []
+        if not exp.get("no_vsko"): active.append("vsko")
+        if not exp.get("no_gdv"):  active.append("gdv")
+        if not exp.get("no_rw"):   active.append("rw")
+        label += "  [kernel=" + "+".join(active) + "-only]"
     if "prune_threshold" in exp:
         label += f"  [pt={exp['prune_threshold']}]"
     if "fix_threshold" in exp:
@@ -292,22 +290,22 @@ def main() -> None:
     # Build job list: (exp_dict, seed)
     job_pairs: list[tuple[dict, int]] = []
 
-    if args.group == "multiseed":
+    if args.group in ("ablation", "multiseed"):
+        # Ablation always runs multi-seed (A1-A7 × 5 seeds = 35 jobs)
         job_pairs = _expand_multi_seed(MULTI_SEED_CONFIGS, seeds)
     elif args.group is not None:
         if args.group not in ALL_GROUPS:
             print(f"[run_all] Unknown group '{args.group}'. "
-                  f"Valid: {', '.join(sorted(ALL_GROUPS))}, multiseed")
+                  f"Valid: {', '.join(sorted(ALL_GROUPS))}, ablation, multiseed")
             sys.exit(1)
         job_pairs = [(exp, 42) for exp in ALL_GROUPS[args.group]]
     else:
-        # All groups in order
-        for grp in ["1", "2", "2b", "2c", "ablation", "sensitivity",
-                    "realworld", "3", "4", "5"]:
+        # All groups in order; ablation handled below as multi-seed
+        for grp in ["1", "2", "2b", "2c", "sensitivity", "realworld", "3", "4", "5"]:
             if grp == "realworld" and args.skip_realworld:
                 continue
             job_pairs += [(exp, 42) for exp in ALL_GROUPS[grp]]
-        # Multi-seed for key configs
+        # Multi-seed ablation: A1-A7 × MULTI_SEEDS (includes seed=42)
         job_pairs += _expand_multi_seed(MULTI_SEED_CONFIGS, seeds)
 
     if args.skip_large:

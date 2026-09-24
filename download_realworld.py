@@ -93,7 +93,74 @@ def _make_barbell_15() -> nx.Graph:
     return nx.barbell_graph(15, 5)
 
 
+def _make_grid_8x8() -> nx.Graph:
+    G = nx.grid_2d_graph(8, 8)
+    return nx.convert_node_labels_to_integers(G)
+
+
+def _make_triangular_lattice() -> nx.Graph:
+    G = nx.triangular_lattice_graph(6, 8)
+    return nx.convert_node_labels_to_integers(G)
+
+
+def _make_hexagonal_lattice() -> nx.Graph:
+    G = nx.hexagonal_lattice_graph(5, 6)
+    return nx.convert_node_labels_to_integers(G)
+
+
+def _make_turan_graph() -> nx.Graph:
+    return nx.turan_graph(50, 5)
+
+
+def _make_random_regular_50_3() -> nx.Graph:
+    return nx.random_regular_graph(3, 50, seed=42)
+
+
+def _make_random_regular_75_4() -> nx.Graph:
+    return nx.random_regular_graph(4, 76, seed=42)
+
+
+def _make_random_regular_100_3() -> nx.Graph:
+    return nx.random_regular_graph(3, 100, seed=42)
+
+
+# ── Watts-Strogatz small-world graphs ────────────────────────────────────────
+def _ws(n: int, k: int, p: float, seed: int) -> callable:
+    def _make() -> nx.Graph:
+        return nx.watts_strogatz_graph(n, k, p, seed=seed)
+    return _make
+
+
+# ── Barabási-Albert scale-free graphs ────────────────────────────────────────
+def _ba(n: int, m: int, seed: int) -> callable:
+    def _make() -> nx.Graph:
+        return nx.barabasi_albert_graph(n, m, seed=seed)
+    return _make
+
+
+# ── LFR benchmark graphs (community structure) ───────────────────────────────
+def _lfr(n: int, tau1: float, tau2: float, mu: float,
+         avg_degree: int, seed: int) -> callable:
+    def _make() -> nx.Graph:
+        try:
+            G = nx.generators.community.LFR_benchmark_graph(
+                n, tau1, tau2, mu,
+                average_degree=avg_degree,
+                min_community=max(10, n // 8),
+                seed=seed,
+            )
+            return nx.Graph(G)
+        except Exception as exc:
+            raise RuntimeError(f"LFR failed (n={n}, mu={mu}): {exc}") from exc
+    return _make
+
+
+# ---------------------------------------------------------------------------
+# Full catalogue — 14 named/structured + 9 extra structured + 10 WS + 10 BA +
+# 15 LFR = 58 graphs (some LFR may fail and be skipped).
+# ---------------------------------------------------------------------------
 CATALOGUE: List[Tuple[str, callable]] = [
+    # ── Named / classical structured graphs ──────────────────────────────────
     ("karate",                _make_karate),
     ("lesmis",                _make_lesmis),
     ("florentine",            _make_florentine),
@@ -104,10 +171,57 @@ CATALOGUE: List[Tuple[str, callable]] = [
     ("complete_bipartite_5_5", _make_complete_bipartite_5_5),
     ("grid_5x5",              _make_grid_5x5),
     ("grid_7x7",              _make_grid_7x7),
+    ("grid_8x8",              _make_grid_8x8),
     ("grid_10x10",            _make_grid_10x10),
     ("cycle_20",              _make_cycle_20),
     ("wheel_30",              _make_wheel_30),
     ("barbell_15",            _make_barbell_15),
+    ("triangular_lattice",    _make_triangular_lattice),
+    ("hexagonal_lattice",     _make_hexagonal_lattice),
+    ("turan_50_5",            _make_turan_graph),
+    ("rreg_50_3",             _make_random_regular_50_3),
+    ("rreg_76_4",             _make_random_regular_75_4),
+    ("rreg_100_3",            _make_random_regular_100_3),
+    # ── Watts-Strogatz small-world graphs (10 instances) ─────────────────────
+    ("ws_50_4_01",            _ws(50,  4, 0.10, seed=1)),
+    ("ws_50_6_02",            _ws(50,  6, 0.20, seed=2)),
+    ("ws_75_4_01",            _ws(75,  4, 0.10, seed=3)),
+    ("ws_75_6_02",            _ws(75,  6, 0.20, seed=4)),
+    ("ws_100_4_01",           _ws(100, 4, 0.10, seed=5)),
+    ("ws_100_6_02",           _ws(100, 6, 0.20, seed=6)),
+    ("ws_100_8_03",           _ws(100, 8, 0.30, seed=7)),
+    ("ws_150_6_02",           _ws(150, 6, 0.20, seed=8)),
+    ("ws_200_6_01",           _ws(200, 6, 0.10, seed=9)),
+    ("ws_200_8_02",           _ws(200, 8, 0.20, seed=10)),
+    # ── Barabási-Albert scale-free graphs (10 instances) ─────────────────────
+    ("ba_50_2",               _ba(50,  2, seed=11)),
+    ("ba_50_3",               _ba(50,  3, seed=12)),
+    ("ba_75_2",               _ba(75,  2, seed=13)),
+    ("ba_75_3",               _ba(75,  3, seed=14)),
+    ("ba_100_2",              _ba(100, 2, seed=15)),
+    ("ba_100_3",              _ba(100, 3, seed=16)),
+    ("ba_150_2",              _ba(150, 2, seed=17)),
+    ("ba_150_3",              _ba(150, 3, seed=18)),
+    ("ba_200_2",              _ba(200, 2, seed=19)),
+    ("ba_200_3",              _ba(200, 3, seed=20)),
+    # ── LFR benchmark graphs — community structure (15 instances) ────────────
+    # Parameters: (n, tau1, tau2, mu, avg_degree, seed)
+    # tau1≈3 (power-law degree), tau2≈1.5 (power-law communities), mu=mixing
+    ("lfr_50_mu01",           _lfr( 50, 3.0, 1.5, 0.10, 5, seed=21)),
+    ("lfr_50_mu02",           _lfr( 50, 3.0, 1.5, 0.20, 5, seed=22)),
+    ("lfr_50_mu03",           _lfr( 50, 3.0, 1.5, 0.30, 5, seed=23)),
+    ("lfr_75_mu01",           _lfr( 75, 3.0, 1.5, 0.10, 5, seed=24)),
+    ("lfr_75_mu02",           _lfr( 75, 3.0, 1.5, 0.20, 5, seed=25)),
+    ("lfr_75_mu03",           _lfr( 75, 3.0, 1.5, 0.30, 5, seed=26)),
+    ("lfr_100_mu01",          _lfr(100, 3.0, 1.5, 0.10, 6, seed=27)),
+    ("lfr_100_mu02",          _lfr(100, 3.0, 1.5, 0.20, 6, seed=28)),
+    ("lfr_100_mu03",          _lfr(100, 3.0, 1.5, 0.30, 6, seed=29)),
+    ("lfr_150_mu01",          _lfr(150, 3.0, 1.5, 0.10, 6, seed=30)),
+    ("lfr_150_mu02",          _lfr(150, 3.0, 1.5, 0.20, 6, seed=31)),
+    ("lfr_150_mu03",          _lfr(150, 3.0, 1.5, 0.30, 6, seed=32)),
+    ("lfr_200_mu01",          _lfr(200, 3.0, 1.5, 0.10, 6, seed=33)),
+    ("lfr_200_mu02",          _lfr(200, 3.0, 1.5, 0.20, 6, seed=34)),
+    ("lfr_200_mu03",          _lfr(200, 3.0, 1.5, 0.30, 6, seed=35)),
 ]
 
 CATALOGUE_DICT: Dict[str, callable] = {name: fn for name, fn in CATALOGUE}

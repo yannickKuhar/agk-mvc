@@ -96,6 +96,7 @@ def parse_args():
 def _make_run_dir(datasets_str: str, pruner: str = "ml",
                   ilp_solver: str = "auto", prune_threshold: float = 0.10,
                   fix_threshold: float = 1.1, feature_set: str = "kernel",
+                  no_vsko: bool = False, no_gdv: bool = False, no_rw: bool = False,
                   seed: int = 42, base: str = "results") -> Path:
     tag = datasets_str.replace(",", "_").replace(":", "-").replace(" ", "")
     if pruner != "ml":
@@ -104,6 +105,16 @@ def _make_run_dir(datasets_str: str, pruner: str = "ml",
         tag += f"_{ilp_solver}-solver"
     if feature_set != "kernel":
         tag += f"_{feature_set}-feat"
+    # Encode which kernel sub-families are active (A2/A3/A4 disambiguation)
+    if feature_set in ("kernel", "both") and (no_vsko or no_gdv or no_rw):
+        active = []
+        if not no_vsko:
+            active.append("vsko")
+        if not no_gdv:
+            active.append("gdv")
+        if not no_rw:
+            active.append("rw")
+        tag += "_" + "+".join(active) + "-only" if active else "_no-kernel"
     if prune_threshold != 0.10:
         tag += f"_pt{prune_threshold:.2f}"
     if fix_threshold <= 1.0:
@@ -122,6 +133,9 @@ def main():
                                 prune_threshold=args.prune_threshold,
                                 fix_threshold=args.fix_threshold,
                                 feature_set=args.feature_set,
+                                no_vsko=args.no_vsko,
+                                no_gdv=args.no_gdv,
+                                no_rw=args.no_rw,
                                 seed=args.seed)
     else:
         out_dir = Path(args.output_dir)
