@@ -133,6 +133,14 @@ GROUP_ABLATION = [
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "both"},
+    # A8: Ajwani et al. (CPAIOR 2026) features only (13 dims)
+    {"datasets": "synthetic:hard", "pruner": "ml",
+     "prune_threshold": 0.10, "fix_threshold": 0.85,
+     "feature_set": "ajwani"},
+    # A9: kernel + Ajwani combined (119 dims)
+    {"datasets": "synthetic:hard", "pruner": "ml",
+     "prune_threshold": 0.10, "fix_threshold": 0.85,
+     "feature_set": "kernel+ajwani"},
 ]
 
 # ── Group S: sensitivity sweep — fix_threshold and prune_threshold ───────────
@@ -160,8 +168,8 @@ GROUP_REALWORLD = [
      "prune_threshold": 0.10, "fix_threshold": 0.85},
 ]
 
-# ── Multi-seed: ALL ablation conditions A1-A7 × MULTI_SEEDS ─────────────────
-# Exactly 5 seeds per condition → 35 ablation jobs + 5 real-world jobs = 40 total.
+# ── Multi-seed: ALL ablation conditions A1-A9 × MULTI_SEEDS ─────────────────
+# Exactly 5 seeds per condition → 45 ablation jobs + 5 real-world jobs = 50 total.
 # This is the authoritative job list for statistical analysis.
 # Seeds: [42, 123, 456, 789, 1337] — each config runs once per seed.
 MULTI_SEED_CONFIGS = GROUP_ABLATION + [

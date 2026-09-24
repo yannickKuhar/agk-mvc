@@ -91,7 +91,7 @@ def _dir_prefix(exp: dict, seed: int = 42) -> str:
 
 class TestAblationDirectoryDistinctness:
 
-    def test_a1_a7_prefixes_are_unique(self):
+    def test_a1_a9_prefixes_are_unique(self):
         prefixes = [_dir_prefix(exp) for exp in GROUP_ABLATION]
         assert len(prefixes) == len(set(prefixes)), (
             f"Duplicate directory prefixes among ablation conditions: {prefixes}"
@@ -185,6 +185,14 @@ class TestMultiSeedConfigContents:
         assert any(exp.get("feature_set") == "both" for exp in MULTI_SEED_CONFIGS), \
             "A7 (both) not in MULTI_SEED_CONFIGS"
 
+    def test_a8_ajwani_present(self):
+        assert any(exp.get("feature_set") == "ajwani" for exp in MULTI_SEED_CONFIGS), \
+            "A8 (ajwani) not in MULTI_SEED_CONFIGS"
+
+    def test_a9_kernel_ajwani_present(self):
+        assert any(exp.get("feature_set") == "kernel+ajwani" for exp in MULTI_SEED_CONFIGS), \
+            "A9 (kernel+ajwani) not in MULTI_SEED_CONFIGS"
+
     def test_a1_baseline_present(self):
         assert any(exp.get("pruner") == "none" and "synthetic" in exp["datasets"]
                    for exp in MULTI_SEED_CONFIGS), \
@@ -195,7 +203,7 @@ class TestMultiSeedConfigContents:
         assert set(MULTI_SEEDS) == {42, 123, 456, 789, 1337}
 
     def test_total_ablation_jobs(self):
-        # 7 ablation conditions + 1 realworld = 8 configs × 5 seeds = 40 jobs
+        # 9 ablation conditions + 1 realworld = 10 configs × 5 seeds = 50 jobs
         from run_all import _expand_multi_seed
         jobs = _expand_multi_seed(MULTI_SEED_CONFIGS, MULTI_SEEDS)
         assert len(jobs) == len(MULTI_SEED_CONFIGS) * 5

@@ -4,9 +4,11 @@ features/pipeline.py
 Combines node feature families into a single node feature matrix.
 
 Feature sets:
-  'kernel'  (default) : VSKO (13) + GDV (73) + RW (20)  =  106 dims
-  'lauri'             : Lauri et al. (2023) 9 handcrafted features
-  'both'              : kernel + lauri  =  115 dims
+  'kernel'        (default) : VSKO (13) + GDV (73) + RW (20)  =  106 dims
+  'lauri'                   : Lauri et al. (2023) 9 handcrafted features
+  'both'                    : kernel + lauri  =  115 dims
+  'ajwani'                  : O'Connor et al. (CPAIOR 2026) 13 features
+  'kernel+ajwani'           : kernel + ajwani  =  119 dims
 
 Also handles:
   - Graph-level batch processing
@@ -27,7 +29,7 @@ from .vsko import VSKONodeFeatures, feature_names as vsko_names
 from .gdv import GDVNodeFeatures, feature_names as gdv_names
 from .random_walk import RandomWalkNodeFeatures, feature_names as rw_names
 
-FeatureSet = Literal["kernel", "lauri", "both"]
+FeatureSet = Literal["kernel", "lauri", "both", "ajwani", "kernel+ajwani"]
 
 
 class NodeFeaturePipeline:
@@ -38,7 +40,8 @@ class NodeFeaturePipeline:
     ----------
     feature_set : str
         Which feature family to use: 'kernel' (VSKO+GDV+RW, default),
-        'lauri' (9 handcrafted from Lauri et al. 2023), or 'both'.
+        'lauri' (9 handcrafted from Lauri et al. 2023), 'both',
+        'ajwani' (13 features from O'Connor et al. 2026), or 'kernel+ajwani'.
     ego_hops : int
         Ego graph radius for VSKO (default 2).
     use_orca_binary : bool
@@ -69,19 +72,24 @@ class NodeFeaturePipeline:
         normalize: bool = True,
         betweenness_k: int = 50,
     ):
-        if feature_set not in ("kernel", "lauri", "both"):
-            raise ValueError(f"feature_set must be 'kernel', 'lauri', or 'both'; got {feature_set!r}")
+        _VALID_FEATURE_SETS = ("kernel", "lauri", "both", "ajwani", "kernel+ajwani")
+        if feature_set not in _VALID_FEATURE_SETS:
+            raise ValueError(
+                f"feature_set must be one of {_VALID_FEATURE_SETS}; got {feature_set!r}"
+            )
 
         self.feature_set = feature_set
         self.normalize = normalize
 
-        use_kernel = feature_set in ("kernel", "both")
-        use_lauri  = feature_set in ("lauri",  "both")
+        use_kernel  = feature_set in ("kernel", "both", "kernel+ajwani")
+        use_lauri   = feature_set in ("lauri",  "both")
+        use_ajwani  = feature_set in ("ajwani", "kernel+ajwani")
 
-        self.use_vsko = use_vsko and use_kernel
-        self.use_gdv  = use_gdv  and use_kernel
-        self.use_rw   = use_rw   and use_kernel
-        self.use_lauri = use_lauri
+        self.use_vsko   = use_vsko and use_kernel
+        self.use_gdv    = use_gdv  and use_kernel
+        self.use_rw     = use_rw   and use_kernel
+        self.use_lauri  = use_lauri
+        self.use_ajwani = use_ajwani
 
         self.vsko = VSKONodeFeatures(ego_hops=ego_hops, use_orca_binary=use_orca_binary, orca_path=orca_path) if self.use_vsko else None
         self.gdv  = GDVNodeFeatures(orca_path=orca_path)  if self.use_gdv  else None
@@ -116,6 +124,10 @@ class NodeFeaturePipeline:
         if self.use_lauri:
             from .lauri import compute_lauri_features
             parts.append(compute_lauri_features(G))
+
+        if self.use_ajwani:
+            from .ajwani import compute_ajwani_features
+            parts.append(compute_ajwani_features(G))
 
         if not parts:
             raise ValueError("At least one feature type must be enabled.")
@@ -195,6 +207,9 @@ class NodeFeaturePipeline:
         if self.use_lauri:
             from .lauri import feature_names as lauri_names
             names.extend(lauri_names())
+        if self.use_ajwani:
+            from .ajwani import feature_names as ajwani_names
+            names.extend(ajwani_names())
         return names
 
     @property

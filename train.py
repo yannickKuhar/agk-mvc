@@ -65,10 +65,11 @@ def parse_args():
     p.add_argument("--output-dir", type=str, default=None,
                    help="Output directory (default: results/<datasets>_<timestamp>)")
     p.add_argument("--feature-set", type=str, default="kernel",
-                   choices=["kernel", "lauri", "both"],
-                   help="Feature family: 'kernel' (VSKO+GDV+RW, default), "
-                        "'lauri' (9 handcrafted from Lauri et al. 2023), "
-                        "or 'both' (115 dims total)")
+                   choices=["kernel", "lauri", "both", "ajwani", "kernel+ajwani"],
+                   help="Feature family: 'kernel' (VSKO+GDV+RW, 106 dims), "
+                        "'lauri' (9 dims), 'both' (115 dims), "
+                        "'ajwani' (O'Connor et al. 2026, 13 dims), "
+                        "'kernel+ajwani' (119 dims)")
     p.add_argument("--no-vsko", action="store_true")
     p.add_argument("--no-gdv", action="store_true")
     p.add_argument("--no-rw", action="store_true")
