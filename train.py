@@ -41,6 +41,7 @@ from features.pipeline import NodeFeaturePipeline
 from models.classifier import MVCNodeClassifier
 from pruning.heuristic import ConfidencePruner
 from pruning.structural import StructuralPruner
+from pruning.greedy import GreedyDegreePruner
 from solver.mvc_solver import MVCSolver
 from evaluation.metrics import evaluate_pipeline, print_summary, print_summary_by_source
 
@@ -77,10 +78,12 @@ def parse_args():
     p.add_argument("--use-orca", action="store_true")
     p.add_argument("--cv-only", action="store_true")
     p.add_argument("--skip-cv", action="store_true")
-    p.add_argument("--pruner", type=str, default="ml", choices=["ml", "structural", "none"],
+    p.add_argument("--pruner", type=str, default="ml",
+                   choices=["ml", "structural", "greedy", "none"],
                    help="Pruner to use during pipeline evaluation: "
                         "'ml' (default, XGBoost-based), "
-                        "'structural' (fast heuristic, no model needed), "
+                        "'structural' (weighted structural features, no model), "
+                        "'greedy' (degree-greedy heuristic, no model), "
                         "'none' (baseline ILP only)")
     p.add_argument("--solver-backend", type=str, default="ilp", choices=["ilp", "approx"])
     p.add_argument("--solver-timeout", type=int, default=60)
@@ -256,6 +259,11 @@ def main():
     elif args.pruner == "structural":
         pruner = StructuralPruner(threshold=args.prune_threshold)
         print(f"[train] Using StructuralPruner (threshold={args.prune_threshold})")
+    elif args.pruner == "greedy":
+        pruner = GreedyDegreePruner(threshold=args.prune_threshold,
+                                    fix_threshold=args.fix_threshold)
+        print(f"[train] Using GreedyDegreePruner "
+              f"(threshold={args.prune_threshold}, fix={args.fix_threshold})")
     else:
         pruner = None
         print("[train] No pruner — baseline ILP only.")

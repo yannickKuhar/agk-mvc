@@ -51,6 +51,9 @@ GROUP2 = [
     {"datasets": "synthetic:hard", "pruner": "none"},
     {"datasets": "synthetic:hard", "pruner": "ml"},
     {"datasets": "synthetic:hard", "pruner": "structural"},
+    {"datasets": "synthetic:hard", "pruner": "greedy"},
+    {"datasets": "synthetic:hard", "pruner": "greedy",
+     "prune_threshold": 0.10, "fix_threshold": 0.85},
 ]
 
 # ── Group 2b: threshold sweep ────────────────────────────────────────────────
@@ -141,6 +144,9 @@ GROUP_ABLATION = [
     {"datasets": "synthetic:hard", "pruner": "ml",
      "prune_threshold": 0.10, "fix_threshold": 0.85,
      "feature_set": "kernel+ajwani"},
+    # A10: degree-greedy heuristic pruner — ML-free baseline with two-sided pruning
+    {"datasets": "synthetic:hard", "pruner": "greedy",
+     "prune_threshold": 0.10, "fix_threshold": 0.85},
 ]
 
 # ── Group S: sensitivity sweep — fix_threshold and prune_threshold ───────────
@@ -168,8 +174,8 @@ GROUP_REALWORLD = [
      "prune_threshold": 0.10, "fix_threshold": 0.85},
 ]
 
-# ── Multi-seed: ALL ablation conditions A1-A9 × MULTI_SEEDS ─────────────────
-# Exactly 5 seeds per condition → 45 ablation jobs + 5 real-world jobs = 50 total.
+# ── Multi-seed: ALL ablation conditions A1-A10 × MULTI_SEEDS ────────────────
+# Exactly 5 seeds per condition → 50 ablation jobs + 5 real-world jobs = 55 total.
 # This is the authoritative job list for statistical analysis.
 # Seeds: [42, 123, 456, 789, 1337] — each config runs once per seed.
 MULTI_SEED_CONFIGS = GROUP_ABLATION + [
